@@ -6,7 +6,9 @@ export default function LiveCamera() {
   const videoRef = useRef(null);
   const [stream, setStream] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
+  const [result, setResult] = useState(null);
 
+  // === Start kamera ===
   useEffect(() => {
     let currentStream;
 
@@ -16,28 +18,88 @@ export default function LiveCamera() {
         .then((mediaStream) => {
           currentStream = mediaStream;
           setStream(mediaStream);
-          if (videoRef.current) {
-            videoRef.current.srcObject = mediaStream;
-          }
+          if (videoRef.current) videoRef.current.srcObject = mediaStream;
         })
         .catch((err) => {
           console.error("Gagal akses kamera:", err);
-          alert("Gagal mengakses kamera. Pastikan izin kamera aktif.");
+          alert("Pastikan izin kamera aktif.");
           setIsRunning(false);
         });
     }
 
     return () => {
-      if (currentStream) {
-        currentStream.getTracks().forEach((track) => track.stop());
-      }
+      if (currentStream) currentStream.getTracks().forEach((t) => t.stop());
     };
   }, [isRunning]);
 
+  // === Interval deteksi otomatis ===
+  useEffect(() => {
+    if (!isRunning) return;
+    const interval = setInterval(() => {
+      handleDetect();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [isRunning]);
+
+  const captureFrame = () => {
+    const video = videoRef.current;
+    if (!video) return null;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0);
+    return canvas.toDataURL("image/jpeg");
+  };
+
+  const handleDetect = async () => {
+    try {
+      const img = captureFrame();
+      if (!img) return;
+
+      const res = await fetch("/api/detect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageBase64: img }),
+      });
+
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        console.error("❌ Response bukan JSON:", text);
+        return;
+      }
+
+      if (!data || !data.result) {
+        console.error("⚠️ Response kosong:", data);
+        return;
+      }
+
+      setResult(data.result);
+      console.log("✅ Hasil deteksi:", data);
+
+      // Kirim ke history
+      await fetch("/api/history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          camera: "CAM-001",
+          status: data.result.status,
+        }),
+      });
+    } catch (err) {
+      console.error("💥 Error handleDetect:", err);
+    }
+  };
+
   const startMonitoring = () => setIsRunning(true);
   const stopMonitoring = () => {
-    if (stream) stream.getTracks().forEach((track) => track.stop());
+    if (stream) stream.getTracks().forEach((t) => t.stop());
     setIsRunning(false);
+    setResult(null);
   };
 
   return (
@@ -67,7 +129,7 @@ export default function LiveCamera() {
         </button>
       </div>
 
-      <div className="bg-[#1E2433] aspect-video w-full flex items-center justify-center rounded-b-xl relative overflow-hidden">
+      <div className="bg-[#1E2433] aspect-video w-full flex flex-col items-center justify-center rounded-b-xl relative overflow-hidden">
         {isRunning ? (
           <video
             ref={videoRef}
@@ -78,24 +140,23 @@ export default function LiveCamera() {
           />
         ) : (
           <div className="flex flex-col items-center text-gray-400 text-sm select-none">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={1.5}
-              stroke="currentColor"
-              className="w-12 h-12 mb-2 opacity-70"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M15.75 10.5V6.75a.75.75 0 00-.75-.75h-3.243m0 0L9.75 3.75m2.007 2.25v5.25M4.5 6.75h15a2.25 2.25 0 012.25 2.25v6a2.25 2.25 0 01-2.25 2.25h-15A2.25 2.25 0 012.25 15V9a2.25 2.25 0 012.25-2.25z"
-              />
-            </svg>
             <p className="font-semibold">Camera Inactive</p>
             <p className="text-xs text-gray-400">
               Click <b>Start Monitoring</b> to begin
             </p>
+          </div>
+        )}
+
+        {result && (
+          <div className="absolute bottom-4 right-4 bg-white/80 backdrop-blur-md px-4 py-2 rounded-lg text-sm font-semibold">
+            Status:{" "}
+            <span
+              className={`${
+                result.status === "Aman" ? "text-green-700" : "text-red-700"
+              }`}
+            >
+              {result.status}
+            </span>
           </div>
         )}
       </div>
